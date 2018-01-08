@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	kx = 32 //TODO benchmark tune this number if using custom key/value type(s).
-	kd = 32 //TODO benchmark tune this number if using custom key/value type(s).
+	kx = 128 //TODO benchmark tune this number if using custom key/value type(s).
+	kd = 128 //TODO benchmark tune this number if using custom key/value type(s).
 )
 
 func init() {
@@ -181,6 +181,13 @@ func (q *x) siblings(i int) (l, r *d) {
 func (l *d) mvL(r *d, c int) {
 	copy(l.d[l.c:], r.d[:c])
 	copy(r.d[:], r.d[c:r.c])
+	// Technically, zeroing out the de's here is not necessary,
+	// but it possibly prevents reading bad data.
+	/*
+		for i := 1; i < c; i++ {
+			r.d[r.c-i] = zde
+		}
+	*/
 	l.c += c
 	r.c -= c
 }
@@ -188,6 +195,13 @@ func (l *d) mvL(r *d, c int) {
 func (l *d) mvR(r *d, c int) {
 	copy(r.d[c:], r.d[:r.c])
 	copy(r.d[:c], l.d[l.c-c:])
+	// Technically, zeroing out the de's here is not necessary,
+	// but it possibly prevents reading bad data.
+	/*
+		for i := 1; i < c; i++ {
+			l.d[l.c-c+i] = zde
+		}
+	*/
 	r.c += c
 	l.c -= c
 }
@@ -449,16 +463,31 @@ func (t *Tree) overflow(p *x, q *d, pi, i int, k interface{} /*K*/, v interface{
 	t.ver++
 	l, r := p.siblings(pi)
 
+	// s is the number of items to shift out of the full data container to
+	// allow for the new data item. This logic shifts by half the available
+	// space plus one. In the case where the new item is to be inserted within
+	// the calculated shift space, then s is reduced to include only the
+	// data items up to the index of the new data item.
 	if l != nil && l.c < 2*kd && i != 0 {
-		l.mvL(q, 1)
-		t.insert(q, i-1, k, v)
+		s := (2*kd-l.c)/2 + 1 // half plus one
+		//s := 2*kd - l.c // all avaiable
+		if i < s {
+			s = i
+		}
+		l.mvL(q, s)
+		t.insert(q, i-s, k, v)
 		p.x[pi-1].k = q.d[0].k
 		return
 	}
 
 	if r != nil && r.c < 2*kd {
 		if i < 2*kd {
-			q.mvR(r, 1)
+			s := (2*kd-r.c)/2 + 1 // half plus one
+			//s := 2*kd - r.c // all available
+			if 2*kd-i < s {
+				s = 2*kd - i
+			}
+			q.mvR(r, s)
 			t.insert(q, i, k, v)
 			p.x[pi].k = r.d[0].k
 			return
