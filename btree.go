@@ -181,13 +181,11 @@ func (q *x) siblings(i int) (l, r *d) {
 func (l *d) mvL(r *d, c int) {
 	copy(l.d[l.c:], r.d[:c])
 	copy(r.d[:], r.d[c:r.c])
-	// Technically, zeroing out the de's here is not necessary,
-	// but it possibly prevents reading bad data.
-	/*
-		for i := 1; i < c; i++ {
-			r.d[r.c-i] = zde
-		}
-	*/
+	// Zero out the de's here to prevent reading bad data
+	// and to avoid creating non-collectible (GC) references.
+	for i := 1; i < c; i++ {
+		r.d[r.c-i] = zde
+	}
 	l.c += c
 	r.c -= c
 }
@@ -195,13 +193,11 @@ func (l *d) mvL(r *d, c int) {
 func (l *d) mvR(r *d, c int) {
 	copy(r.d[c:], r.d[:r.c])
 	copy(r.d[:c], l.d[l.c-c:])
-	// Technically, zeroing out the de's here is not necessary,
-	// but it possibly prevents reading bad data.
-	/*
-		for i := 1; i < c; i++ {
-			l.d[l.c-c+i] = zde
-		}
-	*/
+	// Zero out the de's here to prevent reading bad data
+	// and to avoid creating non-collectible (GC) references.
+	for i := 1; i < c; i++ {
+		l.d[l.c-c+i] = zde
+	}
 	r.c += c
 	l.c -= c
 }
