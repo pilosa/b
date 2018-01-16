@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	kx = 32 //TODO benchmark tune this number if using custom key/value type(s).
-	kd = 32 //TODO benchmark tune this number if using custom key/value type(s).
+	kx = 128 //TODO benchmark tune this number if using custom key/value type(s).
+	kd = 128 //TODO benchmark tune this number if using custom key/value type(s).
 )
 
 func init() {
@@ -42,7 +42,7 @@ func (p *btTpool) get(cmp Cmp) *Tree {
 
 type btEpool struct{ sync.Pool }
 
-func (p *btEpool) get(err error, hit bool, i int, k interface{} /*K*/, q *d, t *Tree, ver int64) *Enumerator {
+func (p *btEpool) get(err error, hit bool, i int, k uint64, q *d, t *Tree, ver int64) *Enumerator {
 	x := p.Get().(*Enumerator)
 	x.err, x.hit, x.i, x.k, x.q, x.t, x.ver = err, hit, i, k, q, t, ver
 	return x
@@ -55,7 +55,7 @@ type (
 	//	  0 if a == b
 	//	> 0 if a >  b
 	//
-	Cmp func(a, b interface{} /*K*/) int
+	Cmp func(a, b uint64) int
 
 	d struct { // data page
 		c int
@@ -65,8 +65,8 @@ type (
 	}
 
 	de struct { // d element
-		k interface{} /*K*/
-		v interface{} /*V*/
+		k uint64
+		v interface{}
 	}
 
 	// Enumerator captures the state of enumerating a tree. It is returned
@@ -81,7 +81,7 @@ type (
 		err error
 		hit bool
 		i   int
-		k   interface{} /*K*/
+		k   uint64
 		q   *d
 		t   *Tree
 		ver int64
@@ -99,7 +99,7 @@ type (
 
 	xe struct { // x element
 		ch interface{}
-		k  interface{} /*K*/
+		k  uint64
 	}
 
 	x struct { // index page
@@ -112,7 +112,7 @@ var ( // R/O zero values
 	zd  d
 	zde de
 	ze  Enumerator
-	zk  interface{} /*K*/
+	zk  uint64
 	zt  Tree
 	zx  x
 	zxe xe
@@ -150,7 +150,7 @@ func (q *x) extract(i int) {
 	}
 }
 
-func (q *x) insert(i int, k interface{} /*K*/, ch interface{}) *x {
+func (q *x) insert(i int, k uint64, ch interface{}) *x {
 	c := q.c
 	if i < c {
 		q.x[c+1].ch = q.x[c].ch
@@ -181,6 +181,11 @@ func (q *x) siblings(i int) (l, r *d) {
 func (l *d) mvL(r *d, c int) {
 	copy(l.d[l.c:], r.d[:c])
 	copy(r.d[:], r.d[c:r.c])
+	// Zero out the de's here to prevent reading bad data
+	// and to avoid creating non-collectible (GC) references.
+	for i := 1; i < c; i++ {
+		r.d[r.c-i] = zde
+	}
 	l.c += c
 	r.c -= c
 }
@@ -188,6 +193,11 @@ func (l *d) mvL(r *d, c int) {
 func (l *d) mvR(r *d, c int) {
 	copy(r.d[c:], r.d[:r.c])
 	copy(r.d[:c], l.d[l.c-c:])
+	// Zero out the de's here to prevent reading bad data
+	// and to avoid creating non-collectible (GC) references.
+	for i := 1; i < c; i++ {
+		l.d[l.c-c+i] = zde
+	}
 	r.c += c
 	l.c -= c
 }
@@ -281,7 +291,7 @@ func (t *Tree) catX(p, q, r *x, pi int) {
 
 // Delete removes the k's KV pair, if it exists, in which case Delete returns
 // true.
-func (t *Tree) Delete(k interface{} /*K*/) (ok bool) {
+func (t *Tree) Delete(k uint64) (ok bool) {
 	pi := -1
 	var p *x
 	q := t.r
@@ -331,7 +341,7 @@ func (t *Tree) Delete(k interface{} /*K*/) (ok bool) {
 	}
 }
 
-func (t *Tree) extract(q *d, i int) { // (r interface{} /*V*/) {
+func (t *Tree) extract(q *d, i int) { // (r interface{}) {
 	t.ver++
 	//r = q.d[i].v // prepared for Extract
 	q.c--
@@ -343,8 +353,8 @@ func (t *Tree) extract(q *d, i int) { // (r interface{} /*V*/) {
 	return
 }
 
-func (t *Tree) find(q interface{}, k interface{} /*K*/) (i int, ok bool) {
-	var mk interface{} /*K*/
+func (t *Tree) find(q interface{}, k uint64) (i int, ok bool) {
+	var mk uint64
 	l := 0
 	switch x := q.(type) {
 	case *x:
@@ -381,7 +391,7 @@ func (t *Tree) find(q interface{}, k interface{} /*K*/) (i int, ok bool) {
 
 // First returns the first item of the tree in the key collating order, or
 // (zero-value, zero-value) if the tree is empty.
-func (t *Tree) First() (k interface{} /*K*/, v interface{} /*V*/) {
+func (t *Tree) First() (k uint64, v interface{}) {
 	if q := t.first; q != nil {
 		q := &q.d[0]
 		k, v = q.k, q.v
@@ -391,7 +401,7 @@ func (t *Tree) First() (k interface{} /*K*/, v interface{} /*V*/) {
 
 // Get returns the value associated with k and true if it exists. Otherwise Get
 // returns (zero-value, false).
-func (t *Tree) Get(k interface{} /*K*/) (v interface{} /*V*/, ok bool) {
+func (t *Tree) Get(k uint64) (v interface{}, ok bool) {
 	q := t.r
 	if q == nil {
 		return
@@ -417,7 +427,7 @@ func (t *Tree) Get(k interface{} /*K*/) (v interface{} /*V*/, ok bool) {
 	}
 }
 
-func (t *Tree) insert(q *d, i int, k interface{} /*K*/, v interface{} /*V*/) *d {
+func (t *Tree) insert(q *d, i int, k uint64, v interface{}) *d {
 	t.ver++
 	c := q.c
 	if i < c {
@@ -432,7 +442,7 @@ func (t *Tree) insert(q *d, i int, k interface{} /*K*/, v interface{} /*V*/) *d 
 
 // Last returns the last item of the tree in the key collating order, or
 // (zero-value, zero-value) if the tree is empty.
-func (t *Tree) Last() (k interface{} /*K*/, v interface{} /*V*/) {
+func (t *Tree) Last() (k uint64, v interface{}) {
 	if q := t.last; q != nil {
 		q := &q.d[q.c-1]
 		k, v = q.k, q.v
@@ -445,20 +455,35 @@ func (t *Tree) Len() int {
 	return t.c
 }
 
-func (t *Tree) overflow(p *x, q *d, pi, i int, k interface{} /*K*/, v interface{} /*V*/) {
+func (t *Tree) overflow(p *x, q *d, pi, i int, k uint64, v interface{}) {
 	t.ver++
 	l, r := p.siblings(pi)
 
+	// s is the number of items to shift out of the full data container to
+	// allow for the new data item. This logic shifts by half the available
+	// space plus one. In the case where the new item is to be inserted within
+	// the calculated shift space, then s is reduced to include only the
+	// data items up to the index of the new data item.
 	if l != nil && l.c < 2*kd && i != 0 {
-		l.mvL(q, 1)
-		t.insert(q, i-1, k, v)
+		s := (2*kd-l.c)/2 + 1 // half plus one
+		//s := 2*kd - l.c // all avaiable
+		if i < s {
+			s = i
+		}
+		l.mvL(q, s)
+		t.insert(q, i-s, k, v)
 		p.x[pi-1].k = q.d[0].k
 		return
 	}
 
 	if r != nil && r.c < 2*kd {
 		if i < 2*kd {
-			q.mvR(r, 1)
+			s := (2*kd-r.c)/2 + 1 // half plus one
+			//s := 2*kd - r.c // all available
+			if 2*kd-i < s {
+				s = 2*kd - i
+			}
+			q.mvR(r, s)
 			t.insert(q, i, k, v)
 			p.x[pi].k = r.d[0].k
 			return
@@ -475,7 +500,7 @@ func (t *Tree) overflow(p *x, q *d, pi, i int, k interface{} /*K*/, v interface{
 // Seek returns an Enumerator positioned on an item such that k >= item's key.
 // ok reports if k == item.key The Enumerator's position is possibly after the
 // last item in the tree.
-func (t *Tree) Seek(k interface{} /*K*/) (e *Enumerator, ok bool) {
+func (t *Tree) Seek(k uint64) (e *Enumerator, ok bool) {
 	q := t.r
 	if q == nil {
 		e = btEPool.get(nil, false, 0, k, nil, t, t.ver)
@@ -526,7 +551,7 @@ func (t *Tree) SeekLast() (e *Enumerator, err error) {
 }
 
 // Set sets the value associated with k.
-func (t *Tree) Set(k interface{} /*K*/, v interface{} /*V*/) {
+func (t *Tree) Set(k uint64, v interface{}) {
 	//dbg("--- PRE Set(%v, %v)\n%s", k, v, t.dump())
 	//defer func() {
 	//	dbg("--- POST\n%s\n====\n", t.dump())
@@ -589,14 +614,14 @@ func (t *Tree) Set(k interface{} /*K*/, v interface{} /*V*/) {
 //
 // 	tree.Set(k, v) call conceptually equals calling
 //
-// 	tree.Put(k, func(interface{} /*K*/, bool){ return v, true })
+// 	tree.Put(k, func(uint64, bool){ return v, true })
 //
 // modulo the differing return values.
-func (t *Tree) Put(k interface{} /*K*/, upd func(oldV interface{} /*V*/, exists bool) (newV interface{} /*V*/, write bool)) (oldV interface{} /*V*/, written bool) {
+func (t *Tree) Put(k uint64, upd func(oldV interface{}, exists bool) (newV interface{}, write bool)) (oldV interface{}, written bool) {
 	pi := -1
 	var p *x
 	q := t.r
-	var newV interface{} /*V*/
+	var newV interface{}
 	if q == nil {
 		// new KV pair in empty tree
 		newV, written = upd(newV, false)
@@ -659,7 +684,7 @@ func (t *Tree) Put(k interface{} /*K*/, upd func(oldV interface{} /*V*/, exists 
 	}
 }
 
-func (t *Tree) split(p *x, q *d, pi, i int, k interface{} /*K*/, v interface{} /*V*/) {
+func (t *Tree) split(p *x, q *d, pi, i int, k uint64, v interface{}) {
 	t.ver++
 	r := btDPool.Get().(*d)
 	if q.n != nil {
@@ -805,7 +830,7 @@ func (e *Enumerator) Close() {
 // Next returns the currently enumerated item, if it exists and moves to the
 // next item in the key collation order. If there is no item to return, err ==
 // io.EOF is returned.
-func (e *Enumerator) Next() (k interface{} /*K*/, v interface{} /*V*/, err error) {
+func (e *Enumerator) Next() (k uint64, v interface{}, err error) {
 	if err = e.err; err != nil {
 		return
 	}
@@ -853,7 +878,7 @@ func (e *Enumerator) next() error {
 // Prev returns the currently enumerated item, if it exists and moves to the
 // previous item in the key collation order. If there is no item to return, err
 // == io.EOF is returned.
-func (e *Enumerator) Prev() (k interface{} /*K*/, v interface{} /*V*/, err error) {
+func (e *Enumerator) Prev() (k uint64, v interface{}, err error) {
 	if err = e.err; err != nil {
 		return
 	}
